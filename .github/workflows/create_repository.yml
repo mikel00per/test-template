@@ -1,0 +1,106 @@
+name: create_repository
+
+on:
+  create:
+    branches:
+      - dev
+
+jobs:
+  create_laravel:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+    
+      - name: Create proyect Laravel.
+        run: composer create-project laravel/laravel --prefer-dist --keep-vcs --no-interaction --ansi
+        
+      - name: Remove .git of Laravel
+        run: rm -rf ./laravel/.git
+        
+      - name: Move files to prev folder
+        run: |
+          shopt -s dotglob nullglob
+          mv ./laravel/* ./
+          
+      - name: List dirs
+        run: ls -la
+          
+      - name: Remove .env from .gitignore
+        run:  sed -i .gitignore -e '/.env/d'
+      
+      - name: Config .env
+        run: |
+          nameUpperCase=$(echo "${{ github.event.repository.name }}" | sed -r 's/(^|-)([a-z])/\U\2/g')
+          sed -i .env -e "s/APP_NAME=Laravel/APP_NAME=${nameUpperCase}/" 
+          sed -i .env -e "s/DB_CONNECTION=mysql/DB_CONNECTION=pgsql/"
+          sed -i .env -e "s/DB_PORT=3306/DB_PORT=5432/"
+          sed -i .env -e "s/DB_DATABASE=laravel/DB_DATABASE=${nameUpperCase}/"
+          sed -i .env -e "s/DB_USERNAME=root//"
+          sed -i .env -e "s/DB_PASSWORD=//"
+          sed -i config/database.php -e "s/'username' => env('DB_USERNAME', 'forge'),/'username' => env('DB_USERNAME', getenv('dbUser')),/"
+          sed -i config/database.php -e "s/'password' => env('DB_PASSWORD', ''),/'password' => env('DB_PASSWORD', env('dbPassword')),/"
+          
+      - name: Config require packages dev
+        run: |
+          composer require --dev laravel/telescope
+          composer require --dev barryvdh/laravel-ide-helper
+          composer require --dev doctrine/dbal
+          php artisan vendor:publish --all
+          php artisan clear-compiled --no-interaction
+          php artisan telescope:install
+          
+      - name: Config TestCase to execute tests
+        run: |
+          sed -i tests/TestCase.php -e 's/use Illuminate\\Foundation\\Testing\\TestCase as BaseTestCase;/use Illuminate\\Foundation\\Testing\\TestCase as BaseTestCase;\nuse Illuminate\\Foundation\\Testing\\DatabaseTransactions;\nuse Illuminate\\Foundation\\Testing\\DatabaseMigrations;/'
+          sed -i tests/TestCase.php -e 's/use CreatesApplication;/use CreatesApplication, DatabaseMigrations, DatabaseTransactions;/'
+          
+      - name: Commit and push to dev
+        run: |
+          git config --global user.name 'Miguel Morillo'
+          git config --global user.email 'miguelmwilliams@gmail.com'
+          git add -A
+          git commit -am "Automatic creation of Laravel"
+          git push
+          
+      - name: Creating test branch
+        run : |
+          git checkout -b test
+          nameUpperCase=$(echo "${{ github.event.repository.name }}" | sed -r 's/(^|-)([a-z])/\U\2/g')
+          sed -i .env -e 's/APP_ENV=local/APP_ENV=testing/'
+          cp .env .env.testing
+          php artisan key:generate --env=testing
+          sed -i .env.testing -e "s/DB_CONNECTION=pgsql/DB_CONNECTION=sqlite/"
+          sed -i .env.testing -e "s/DB_DATABASE=${nameUpperCase}/DB_DATABASE=:memory:/"
+          sed -i .env.testing -e "s/DB_PORT=5432//"
+          sed -i .env.testing -e "s/DB_HOST=127.0.0.1//"
+          
+          git add -A
+          git commit -am "Config branch test"
+          git push --set-upstream origin test
+
+      - name: Creating staging branch
+        run : |
+          git checkout -b staging
+          rm .env.testing
+          sed -i .env -e 's/APP_ENV=testing/APP_ENV=staging/'
+          cp .env .env.staging
+          php artisan key:generate --env=staging
+          sed -i .env.staging -e 's/APP_DEBUG=true/APP_DEBUG=false/' 
+          sed -i config/app.php  -e '/TelescopeServiceProvider/d'
+          rm app/Providers/TelescopeServiceProvider.php 
+          composer remove laravel/telescope --dev
+          git add -A
+          git commit -am "Config staging branch"
+          git push --set-upstream origin staging
+        
+      - name: Creating production branch
+        run : |
+          git checkout -b production
+          sed -i .env.staging -e 's/APP_ENV=staging/APP_ENV=production/'
+          mv .env.staging .env.production
+          cp .env.production .env
+          git add -A
+          git commit -am "Config staging branch"
+          php artisan key:generate --env=production
+          git push --set-upstream origin production
